@@ -11,21 +11,20 @@ import (
 )
 
 const (
-	annotationTimeReclaimVolumes = "time-reclaim-volumes.cern.ch/time-reclaim"
-	annotationReclaimPolicy      = "persistentVolumeReclaimPolicy"
-	annotationDelete             = "volume-ready-to-delete.cern.ch/delete-volume"
-	reclaimPolicy                = "Delete"
+	annotationPeriodReclaimVolumesAfterRelease = "reclaim-volumes.cern.ch/deletion-grace-period-after-release"
+	annotationNoGracePeriodSinceCreation       = "reclaim-volumes.cern.ch/no-grace-period-if-time-since-creation-is-less-than"
+	annotationReclaimPolicy                    = "persistentVolumeReclaimPolicy"
+	annotationDelete                           = "volume-ready-to-delete.cern.ch/delete-volume"
+	reclaimPolicy                              = "Delete"
 )
 
 var (
-	tActual                 = time.Now()
-	tParsingStorageClass    time.Duration
-	tSelectedToDeleteVolume = "720h"
-
-	// Register values for command-line flag parsing, by default we add a value
-	// In order to interact with this, it is only required to add the pertinent flag during the execution (e.g. -reclaimTimePV 5h)
-	loopCreationTimePVPtr = flag.String("loopCreationTimePV", "-1h", "Sets the max time loop for volumes created to be removed")
-	storageClassNamePtr   = flag.String("storageClassName", "cephfs", "Specify the storageClassName")
+	tNow                       = time.Now()
+	tParsingPVAnnotation       time.Duration
+	noGracePeriodSinceCreation string
+	// Register value for command-line flag parsing, by default we add a value
+	// In order to interact with this, it is only required to add the pertinent flag during the execution (e.g. -storageClassName cephfs)
+	storageClassNamePtr = flag.String("storageClassName", "cephfs", "Specify the storageClassName")
 )
 
 func main() {
@@ -48,50 +47,60 @@ func main() {
 	// Loop over all the PVs
 	for _, persV := range pvList.Items {
 
-		// Get annotation from the storageClass of the PV in order to get the timeReclaimVolume annotation, if there is no an existing storageClass,
-		// the cronjob will run and sets tSelectedToDeleteVolume to a default value
-		storageClassObj, err := clientset.StorageV1beta1().StorageClasses().Get(persV.Spec.StorageClassName, meta_v1.GetOptions{})
-		if err != nil {
-			klog.Infof("INFO: StorageClass of volume %s does not exists %s \n", persV.GetName(), err)
-		}
-
-		// Check whether the annotationTimeReclaimVolumes is set set to the StorageClass and if not set tSelectedToDeleteVolume to 720h (30d)
-		if _, ok := storageClassObj.ObjectMeta.Annotations[annotationTimeReclaimVolumes]; ok {
-			tSelectedToDeleteVolume = storageClassObj.ObjectMeta.Annotations[annotationTimeReclaimVolumes]
-		}
-
-		// Parse time by StorageClass annotation if it exists, if not parse the default tSelectedToDeleteVolume
-		tParsingStorageClass, err = time.ParseDuration(tSelectedToDeleteVolume)
-		if err != nil {
-			klog.Errorf("ERROR: Impossible to parse time %s ", err)
+		// Check whether the annotationPeriodReclaimVolumesAfterRelease is set in the annotations of the PV
+		if _, ok := persV.ObjectMeta.Annotations[annotationPeriodReclaimVolumesAfterRelease]; ok {
+			tParsingPVAnnotation, err = time.ParseDuration(persV.ObjectMeta.Annotations[annotationPeriodReclaimVolumesAfterRelease])
+			if err != nil {
+				klog.Errorf("ERROR: Impossible to parse time %s volume: %s ", err, persV.Name)
+				continue
+			}
+		} else {
 			continue
 		}
 
-		// Calculates when the PV is going to be deleted, tActual + tSelectedToDeleteVolume
-		tFuture := tActual.Add(tParsingStorageClass)
+		// Calculates when the PV is going to be deleted, tNow + annotationPeriodReclaimVolumesAfterRelease formatted into RFC3339
+		tFutureDeletionPV := tNow.Add(tParsingPVAnnotation).Format(time.RFC3339)
 
-		// Parse time loopCreationTimePVPtr,
-		// which will subtract the time specified by default will be -1h
-		tActualSubs, err := time.ParseDuration(*loopCreationTimePVPtr)
-		if err != nil {
-			klog.Errorf("ERROR: Impossible to parse time %s ", err)
+		// Parse time noGracePeriodSinceCreation from annotation if exists, this string has to be with negative sign
+		if _, ok := persV.ObjectMeta.Annotations[annotationNoGracePeriodSinceCreation]; ok {
+			noGracePeriodSinceCreation = persV.ObjectMeta.Annotations[annotationNoGracePeriodSinceCreation]
+		} else {
 			continue
 		}
-		tPast := tActual.Add(tActualSubs)
 
-		if persV.Status.Phase == "Released" {
+		tNowSubs, err := time.ParseDuration(noGracePeriodSinceCreation)
+		if err != nil {
+			klog.Errorf("ERROR: Impossible to parse time %s volume: %s ", err, persV.Name)
+			continue
+		}
+		// tNowSubs has to be in negative as it is the easiest way to subtract duration from time.Time
+		tPast := tNow.Add(-tNowSubs)
 
-			// Check weather the storageClass and the storageClassName set in the PV are equivalent
-			if persV.Spec.StorageClassName == *storageClassNamePtr && persV.Spec.StorageClassName == storageClassObj.ObjectMeta.Name {
+		if persV.Status.Phase != "Released" {
+			//nothing to do
+			continue
+		} else {
+			// Check whether the storageClass and the storageClassName set in the PV are equivalent
+			if persV.Spec.StorageClassName == *storageClassNamePtr {
 
 				klog.Infoln("INFO: PersistentVolume: ", persV.GetName(), " with Storage: ", *storageClassNamePtr, " - Status: ", persV.Status.Phase)
 
-				// If annotation has not been set yet to delete the PV, set annotation to be considered during the next run
+				// If annotation is not set to delete the PV, set annotation to be considered during the next run
 				if _, ok := persV.ObjectMeta.Annotations[annotationDelete]; !ok {
-					// If the volume has been deleted before loopCreationTimePVPtr (default to 1h) from the creation time, it will be automatically deleted,
-					// this will prevent issues like the one we had in OTG0048218 creating PVs in a loop
-					if persV.GetCreationTimestamp().Sub(tPast) > 0 {
-						klog.Infof("INFO: PV '%s' was marked for deletion less than '%s' ago. Proceeding with the deletion ...", persV.GetName(), strings.Replace(*loopCreationTimePVPtr, "-", "", -1))
+
+					// When the PV is marked as "Released" after noGracePeriodSinceCreation has passed from the creation has past, a PV annotation
+					// is set in order to delete the volume in annotationPeriodReclaimVolumesAfterRelease.
+					if persV.GetCreationTimestamp().Sub(tPast) < 0 {
+						klog.Infof("INFO: The PV %s will be deleted into %v \n", persV.Name, tFutureDeletionPV)
+						err = setAnnotationsPV(persV.Name, annotationDelete, fmt.Sprintf("%s", tFutureDeletionPV))
+						if err != nil {
+							klog.Errorf("ERROR: patching PV %s with annotation %s %v", persV.Name, annotationDelete, tFutureDeletionPV)
+							continue
+						}
+						// If the volume is marked as "Released" before noGracePeriodSinceCreation has passed from the creation time, it will be automatically deleted.
+						// This will prevent issues like OTG0048218, creating PVs in a loop
+					} else {
+						klog.Infof("INFO: PV '%s' was marked for deletion less than '%s' ago. Proceeding with the deletion ...", persV.GetName(), strings.Replace(noGracePeriodSinceCreation, "-", "", -1))
 
 						// Set annotation to delete the persistentVolume instantly
 						err = patchPV(persV.Name, annotationReclaimPolicy, reclaimPolicy)
@@ -99,25 +108,27 @@ func main() {
 							klog.Errorf("INFO: PV '%s' reclaimPolicy set to %s!", persV.Name, reclaimPolicy)
 							continue
 						}
-					} else {
-						// When the PV has been marked as deleted after the first hour from the creation has past, an annotation will be
-						// set in order to delete the volume in tSelectedToDeleteVolume
-						klog.Infof("INFO: The PV %s will be deleted into %v \n", persV.Name, tFuture)
-						err = setAnnotationsPV(persV.Name, annotationDelete, fmt.Sprintf("%s", tFuture))
-						if err != nil {
-							klog.Errorf("ERROR: patching PV %s with annotation %s %v", persV.Name, annotationDelete, tFuture)
-							continue
-						}
 					}
-					// When the PV has already been marked for deletion and the actual time is higher than the time annotated, it will delete the PV
-				} else if tActual.String() >= persV.ObjectMeta.Annotations[annotationDelete] {
-					klog.Infof("PV '%s' is marked for deletion on the '%s', which has already passed. Proceeding with the deletion ...", persV.Name, persV.ObjectMeta.Annotations[annotationDelete])
-					err = patchPV(persV.Name, annotationReclaimPolicy, reclaimPolicy)
+					// When the PV is marked for deletion, and the actual time is higher than the time annotated, it will delete the PV
+				} else {
+					// Parse annotation to delete into time.RFC3339 format
+					tDeleteParsed, err := time.Parse("2006-01-02T15:04:05+01:00", persV.ObjectMeta.Annotations[annotationDelete])
 					if err != nil {
-						klog.Errorf("ERROR: patching PV %s with annotation %s %s", persV.Name, annotationReclaimPolicy, reclaimPolicy)
+						klog.Errorf("ERROR: parsing annotation %s in PV %s %v", annotationDelete, persV.Name, err)
 						continue
 					}
-					klog.Infof("INFO: PV '%s' reclaimPolicy set to %s!", persV.Name, reclaimPolicy)
+
+					// Delete PVs where tNow is higher than the annotationDelete of the PV
+					if tNow.After(tDeleteParsed) {
+
+						klog.Infof("PV '%s' is marked for deletion on the '%s', which has already passed. Proceeding with the deletion ...", persV.Name, persV.ObjectMeta.Annotations[annotationDelete])
+						err = patchPV(persV.Name, annotationReclaimPolicy, reclaimPolicy)
+						if err != nil {
+							klog.Errorf("ERROR: patching PV %s with annotation %s %s", persV.Name, annotationReclaimPolicy, reclaimPolicy)
+							continue
+						}
+						klog.Infof("INFO: PV '%s' reclaimPolicy set to %s!", persV.Name, reclaimPolicy)
+					}
 				}
 			}
 		}

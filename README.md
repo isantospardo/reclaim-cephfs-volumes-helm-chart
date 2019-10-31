@@ -9,15 +9,14 @@ in a specific period of time, this `time-reclaim` is set in each of the StorageC
 Once this time-reclaim is reached, the cronJob patches the `spec` of the PV and sets the `persistentVolumeReclaimPolicy` to `Delete`,
 this will trigger a permanently deletion of the PV.
 
-In light of INC1973961: to mitigate the impact of something that creates and deletes PVCs in a loop, we immediately delete PVs that were released less than loopCreationTimePV (described in the parametrized values) after being created.
+In light of [INC1973961](https://cern.service-now.com/service-portal/view-incident.do?n=INC1973961): to mitigate the impact of something that creates and deletes PVCs in a loop, we immediately delete PVCs that were released less than the PV annotation `reclaim-volumes.cern.ch/no-grace-period-if-time-since-creation-is-less-than` after being created.
 
 ## Parametrized values
 
-In order to interact with this parametrized values, the only requirement is to add the pertinent flag during the execution (e.g. -loopCreationTimePV 5h)
+In order to interact with this parametrized value, the only requirement is to add the pertinent flag during the execution (e.g. -storageClassName cephfs)
 
-*Possible values:*
+*Possible value:*
 
-- loopCreationTimePV: default to `1h`, PVs released less than the loopCreationTimePV after being created to avoid incidents like INC1973961.
 - storageClassName: default to `cephfs`, specifies the storageClassName
 
 ## ServiceAccount
