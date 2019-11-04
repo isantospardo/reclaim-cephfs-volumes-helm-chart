@@ -109,7 +109,7 @@ echo "And the date in the delete annotations is not passed yet"
 echo "Then the PV should be marked for deletion"
 test_name="no-change-for-pv-with-delete-annotation-in-the-future"
 next_year="$(( $(date +%Y) + 1 ))-01-01T08:19:47Z"
-createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-release="720h" reclaim-volumes.cern.ch/no-grace-period-if-time-since-creation-is-less-than="1h" reclaim-volumes.cern.ch/volume-reclaim-deletion-timestamp="${next_year}"
+createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-release="720h" reclaim-volumes.cern.ch/volume-reclaim-deletion-timestamp="${next_year}"
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
