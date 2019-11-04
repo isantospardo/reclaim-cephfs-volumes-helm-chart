@@ -6,6 +6,7 @@ import (
 )
 
 // Declare a kubeclient as a global var to be accessible by all the functions
+// when running in a pod, this will automatically use the pod's serviceaccount to access the cluster API
 var kubeclient = Kubeclient{kubeclient: NewKubeClient()}
 
 type Kubeclient struct {
