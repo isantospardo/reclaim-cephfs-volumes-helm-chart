@@ -63,7 +63,7 @@ func getPVReclaimingGracePeriod(persV v1.PersistentVolume) time.Duration {
 func setPVGracePeriod(persV v1.PersistentVolume) {
 
 	if _, ok := persV.ObjectMeta.Annotations[annotationDelete]; ok {
-		klog.Infof("INFO: PersistentVolume already has delete annotation", persV.Name)
+		klog.Infof("INFO: PersistentVolume %s already has delete annotation", persV.Name)
 		return
 	}
 
@@ -76,7 +76,7 @@ func setPVGracePeriod(persV v1.PersistentVolume) {
 
 	tFutureDeletionPV := time.Now().Add(reclaimingGracePeriod)
 
-	klog.Infof("INFO: The PV %s will be deleted by %v \n", persV.Name, tFutureDeletionPV)
+	klog.Infof("INFO: Setting annotation on PV %s so it is deleted after %v", persV.Name, tFutureDeletionPV)
 	err := setPVDateAnnotation(persV.Name, annotationDelete, tFutureDeletionPV)
 	if err != nil {
 		klog.Errorf("ERROR: patching PV %s with annotation %s %v", persV.Name, annotationDelete, tFutureDeletionPV)
@@ -123,21 +123,21 @@ func main() {
 	// List *all* persistent volumes
 	pvList, err := kubeclient.kubeclient.CoreV1().PersistentVolumes().List(meta_v1.ListOptions{})
 	if err != nil {
-		klog.Fatalf("ERROR: Impossible to retrieve the list of all persistent volumes %s ", err)
+		klog.Fatalf("ERROR: Impossible to retrieve the list of all persistent volumes - %v", err)
 	}
 
 	for _, persV := range pvList.Items {
 		// Reclaiming volumes only makes sense for PVs that have been Released
 		if persV.Status.Phase == "Released" {
 			if pvCanBeReclaimedImmediately(persV) {
-				klog.Infof("INFO: PersistentVolume: %s will be deleted immediately as it does have the minimum age to apply grace period", persV.Name)
+				klog.Infof("INFO: deleting PersistentVolume %s immediately as it does have the minimum age to apply grace period", persV.Name)
 				requestPVDeletion(persV)
 				// nothing else to do for this PV
 				continue
 			}
 
 			if pvGracePeriodHasExpired(persV) {
-				klog.Infof("INFO: PersistentVolume: %s will be deleted since it is at the end of its grace period", persV.Name)
+				klog.Infof("INFO: deleting PersistentVolume %s now since it is at the end of its grace period", persV.Name)
 				requestPVDeletion(persV)
 				// nothing else to do for this PV
 				continue

@@ -3,6 +3,10 @@
 # test must fail if there's any error
 set -e
 
+# arbitrarily use the 'default' namespace
+export namespace=default
+oc project $namespace
+
 function createBoundPV {
     pv_name=$1
     shift
@@ -21,7 +25,7 @@ spec:
         apiVersion: v1
         kind: PersistentVolumeClaim
         name: ${test_name}
-        namespace: default
+        namespace: ${namespace}
     hostPath:
       path: /mnt
 EOF
@@ -66,20 +70,38 @@ function checkPVPhase {
     pv_name=$1
     expected_value=$2
 
-    test "$(oc get pv/$pv_name -o go-template='{{.status.phase}}')" == "${expected_value}"
+    actual_value=$(oc get pv/$pv_name -o go-template='{{.status.phase}}')
+
+    if ! test "${actual_value}" == "${expected_value}"; then
+        echo "TEST FAILED: expected phase '${expected_value}' for PV '${pv_name}', got ${actual_value}"
+        return 1
+    fi
 }
 
 function checkPVMarkedForDeletion {
     pv_name=$1
     # maybe the PV has actually been deleted already, so assume 'Delete' if PV is missing
-    test "$(oc get pv/$pv_name -o go-template='{{.spec.persistentVolumeReclaimPolicy}}' || echo 'Delete')" == "Delete"
+    if ! test "$(oc get pv/$pv_name -o go-template='{{.spec.persistentVolumeReclaimPolicy}}' || echo 'Delete')" == "Delete"; then
+        echo "TEST FAILED: expected PV '${pv_name}' to be marked for deletion or deleted, but it's still there."
+        return 1
+    fi
 }
 
-function getDeleteAnnotationValue {
-    pv_name=$1
-    # NB: if annotation does not exist, jq will return "null"
 
-    oc get pv/$pv_name -o json | jq -r '.metadata.annotations."cern.ch/volume-reclaim-deletion-timestamp"'
+# e.g. checkDeleteannotation myPV == somevalue
+# or checkDeleteannotation myPV != somevalue
+# NB: if annotation does not exist, jq will return "null" so use "null" as the value
+function checkDeleteAnnotation {
+    pv_name=$1
+    condition=$2
+    expected_value=$3
+
+    actual_value=$(oc get pv/$pv_name -o json | jq -r '.metadata.annotations."reclaim-volumes.cern.ch/volume-reclaim-deletion-timestamp"')
+
+    if ! test "${actual_value}" "${condition}" "${expected_value}"; then
+        echo "TEST FAILED: PV $pv_name has delete annotation value '${actual_value}' but we expected '${expected_value}'"
+        return 1
+    fi
 }
 
 
@@ -89,7 +111,7 @@ test_name="no-change-for-bound-pv"
 createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-release="720h" reclaim-volumes.cern.ch/no-grace-period-if-time-since-creation-is-less-than="1h"
 runReclaimer $test_name
 checkPVPhase $test_name "Bound"
-test "$(getDeleteAnnotationValue $test_name)" == "null"
+checkDeleteAnnotation $test_name == "null"
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -106,14 +128,25 @@ echo -e "OK\n"
 echo "When a PV is Released"
 echo "And it has a delete annotation"
 echo "And the date in the delete annotations is not passed yet"
-echo "Then the PV should be marked for deletion"
+echo "Then the PV should not be modified"
 test_name="no-change-for-pv-with-delete-annotation-in-the-future"
 next_year="$(( $(date +%Y) + 1 ))-01-01T08:19:47Z"
 createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-release="720h" reclaim-volumes.cern.ch/volume-reclaim-deletion-timestamp="${next_year}"
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" == "${next_year}"
+checkDeleteAnnotation $test_name == "${next_year}"
+echo -e "OK\n"
+
+echo "When a PV is Released"
+echo "And it has a delete annotation"
+echo "And the date in the delete annotations has passed"
+echo "Then the PV should be marked for deletion"
+test_name="delete-pv-with-delete-annotation-in-the-past"
+createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-release="720h" reclaim-volumes.cern.ch/volume-reclaim-deletion-timestamp="2019-01-01T08:19:47Z"
+releasePV $test_name
+runReclaimer $test_name
+checkPVMarkedForDeletion $test_name
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -125,7 +158,7 @@ createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-rel
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" != "null"
+checkDeleteAnnotation $test_name != "null"
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -137,7 +170,7 @@ createBoundPV $test_name reclaim-volumes.cern.ch/deletion-grace-period-after-rel
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" == "null"
+checkDeleteAnnotation $test_name == "null"
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -148,7 +181,7 @@ createBoundPV $test_name
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" == "null"
+checkDeleteAnnotation $test_name == "null"
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -174,7 +207,7 @@ sleep 2 # longer than no-grace-period-if-time-since-creation-is-less-than annota
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" != "null"
+checkDeleteAnnotation $test_name != "null"
 echo -e "OK\n"
 
 echo "When a PV is Released"
@@ -188,6 +221,6 @@ sleep 2 # longer than no-grace-period-if-time-since-creation-is-less-than annota
 releasePV $test_name
 runReclaimer $test_name
 checkPVPhase $test_name "Released"
-test "$(getDeleteAnnotationValue $test_name)" == "null"
+checkDeleteAnnotation $test_name == "null"
 echo -e "OK\n"
 
