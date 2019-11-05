@@ -1,11 +1,9 @@
-# NB: expects env var image_to_test to point to the docker image implementing the reclaim-cephfs-volume logic to be tested
+# NB: expects the following env vars:
+# image_to_test => point to the docker image implementing the reclaim-cephfs-volume logic to be tested
+# namespace => point to namespace where to create resources (PVCs and pods to run the docker image)
 
 # test must fail if there's any error
 set -e
-
-# arbitrarily use the 'default' namespace
-export namespace=default
-oc project $namespace
 
 function createBoundPV {
     pv_name=$1

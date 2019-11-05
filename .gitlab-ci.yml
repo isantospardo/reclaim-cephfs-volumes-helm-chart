@@ -46,12 +46,15 @@ integration_tests:
   - docker-privileged
   variables:
     image_to_test: reclaimer-image
+    # arbitrarily use the default namespace, since we're guaranteed it exists.
+    namespace: default
   before_script:
     - yum install -y docker-client
     - host_ip=$(docker run --network=host --rm alpine ip -family inet -oneline addr show dev eth0 | awk '{print $4}' | cut -d / -f 1)
     - oc cluster up --public-hostname=${host_ip}
     - oc login -u system:admin
-    # give the default serviceaccount the necessary permissions to reclaim PVs
+    - oc project ${namespace}
+    # give the default serviceaccount in current namespace the necessary permissions to reclaim PVs
     - oc adm policy add-cluster-role-to-user system:csi-external-attacher -z default
   script:
     # Build the image to test
