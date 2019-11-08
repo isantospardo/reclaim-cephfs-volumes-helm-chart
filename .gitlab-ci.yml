@@ -1,43 +1,37 @@
 ---
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
 
 stages:
   - test
   - build
 
-build_kaniko:
-    stage: build
-    only:
-      - master
-    image:
-        # We recommend using the CERN version of the Kaniko image: gitlab-registry.cern.ch/ci-tools/docker-image-builder
-        name: gitlab-registry.cern.ch/ci-tools/docker-image-builder
-        entrypoint: [""]
-    script:
-        - "echo 'Building image ...'"
-        # Prepare Kaniko configuration file
-        - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-        # Build and push the image from the Dockerfile at the root of the project.
-        # To push to a specific docker tag, amend the --destination parameter, e.g. --destination $CI_REGISTRY_IMAGE:$CI_BUILD_REF_NAME
-        # See https://docs.gitlab.com/ee/ci/variables/predefined_variables.html#variables-reference for available variables
-        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE
+.topic_branch_variables: &topic_branch_variables
+  TAG: $CI_COMMIT_REF_NAME
 
-build_kaniko:
-    stage: build
-    except:
-      - master
-    image:
-        # We recommend using the CERN version of the Kaniko image: gitlab-registry.cern.ch/ci-tools/docker-image-builder
-        name: gitlab-registry.cern.ch/ci-tools/docker-image-builder
-        entrypoint: [""]
-    script:
-        - "echo 'Building image ...'"
-        # Prepare Kaniko configuration file
-        - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-        # Build and push the image from the Dockerfile at the root of the project.
-        # To push to a specific docker tag, amend the --destination parameter, e.g. --destination $CI_REGISTRY_IMAGE:$CI_BUILD_REF_NAME
-        # See https://docs.gitlab.com/ee/ci/variables/predefined_variables.html#variables-reference for available variables
-        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE
-    when: manual # don't build automatically with every push
+.build_kaniko_command: &base
+  stage: build
+  image:
+      # We recommend using the CERN version of the Kaniko image: gitlab-registry.cern.ch/ci-tools/docker-image-builder
+      name: gitlab-registry.cern.ch/ci-tools/docker-image-builder
+      entrypoint: [""]
+  script:
+      - export DATE=`date -u +%Y.%m.%dT%H-%M-%SZ`
+      - export TAG=${TAG:-"RELEASE".$DATE}
+      - export CONTEXT=${CONTEXT:-$CI_PROJECT_DIR}
+      - export DOCKERFILE_PATH=${DOCKERFILE_PATH:-Dockerfile}
+      - |
+        export DOCKERFILE=$CONTEXT/$DOCKERFILE_PATH
+        if ! [ -f "$DOCKERFILE" ]; then
+          echo 'Dockerfile not found, please set both CONTEXT and DOCKERFILE_PATH properly' >&2
+          exit 1
+        fi
+      # Prepare Kaniko configuration file:
+      - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+      # Build and push the image from the Dockerfile at the root of the project.
+      # To push to a specific docker tag, amend the --destination parameter, e.g. --destination $CI_REGISTRY_IMAGE:$CI_BUILD_REF_NAME
+      # See https://docs.gitlab.com/ee/ci/variables/predefined_variables.html#variables-reference for available variables
+      - /kaniko/executor --context "$CONTEXT" --dockerfile "$CONTEXT/$DOCKERFILE_PATH" --destination "$CI_REGISTRY_IMAGE:$TAG"
 
 integration_tests:
   stage: test
@@ -60,3 +54,15 @@ integration_tests:
     # Build the image to test
     - docker build -t ${image_to_test} .
     - ./tests/test.sh
+
+Build Master:
+  <<: *base
+  only:
+  - master
+
+Build Topic Branch:
+  <<: *base
+  except:
+  - master
+  variables:
+    <<: *topic_branch_variables
