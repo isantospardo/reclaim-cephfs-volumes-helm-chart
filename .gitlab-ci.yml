@@ -37,11 +37,15 @@ integration_tests:
   stage: test
   image: gitlab-registry.cern.ch/paas-tools/openshift-client:v3.11.0
   tags:
-  - docker-privileged
+  - privileged-runner-okd3
+  #- docker-privileged
   variables:
     image_to_test: reclaimer-image
     # arbitrarily use the default namespace, since we're guaranteed it exists.
     namespace: default
+    # Disable TLS following https://about.gitlab.com/2019/07/31/docker-in-docker-with-docker-19-dot-03/
+    # This will result in a warning that the docker-in-docker service may not have started successfully
+    DOCKER_TLS_CERTDIR: ""
   before_script:
     - yum install -y docker-client
     - host_ip=$(docker run --network=host --rm alpine ip -family inet -oneline addr show dev eth0 | awk '{print $4}' | cut -d / -f 1)

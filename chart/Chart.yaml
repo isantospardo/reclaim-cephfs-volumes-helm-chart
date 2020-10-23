@@ -1,0 +1,16 @@
+apiVersion: v2
+name: cephfs-csi-reclaim-deleted-volumes
+version: 0.1.0
+description: A Helm chart to reclaim deleted volumes
+appVersion: v0.1.0
+keywords:
+- openshift
+- csi
+- reclaim
+- S3
+- manila
+sources:
+- https://gitlab.cern.ch/paas-tools/okd4-deployment/reclaim-cephfs-volumes
+maintainers:
+- name: CERN IT-CDA-WF
+  email: openshift-admins@cern.ch

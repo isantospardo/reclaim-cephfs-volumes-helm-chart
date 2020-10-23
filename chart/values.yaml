@@ -1,0 +1,9 @@
+
+cephfsCSIReclaimDeletedVolumes:
+  schedule:  "VALUE_SET_IN_ARGOCD_DEPLOYMENT"
+  serviceAccount: "VALUE_SET_IN_ARGOCD_DEPLOYMENT"
+  image: "VALUE_SET_IN_ARGOCD_DEPLOYMENT"
+
+# node selector for reclaim deleted volumes jobs.
+nodeSelector:
+  node-role.kubernetes.io/infra: ""

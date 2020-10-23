@@ -1,0 +1,25 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: cephfs-reclaim-deleted-volumes
+  namespace: {{ .Values.namespace }}
+  annotations:
+    description: "Removes deleted volumes that have passed the deletion grace period from CephFS storageClass."
+spec:
+  schedule: {{ .Values.cephfsCSIReclaimDeletedVolumes.schedule }}
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Replace
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          serviceAccountName: {{ .Values.cephfsCSIReclaimDeletedVolumes.serviceAccount }}
+          containers:
+          - image: {{ .Values.cephfsCSIReclaimDeletedVolumes.image }}
+            imagePullPolicy: Always
+            name: cephfs-reclaim-deleted-volumes
+          restartPolicy: Never
+          nodeSelector:
+{{ .Values.nodeSelector | toYaml | indent 12 }}
